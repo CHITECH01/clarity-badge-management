@@ -36,3 +36,60 @@
 ;; Returns true if the sender owns the badge, false otherwise.
 (define-private (is-badge-owner (badge-id uint) (sender principal))
     (is-eq sender (unwrap! (nft-get-owner? digital-badge badge-id) false)))
+
+;; Checks if a badge is burned by looking it up in the burned-badges map.
+;; Returns true if burned, false otherwise.
+(define-private (is-badge-burned (badge-id uint))
+    (default-to false (map-get? burned-badges badge-id)))
+
+;; Creates a single badge, assigning it a unique ID and URI.
+;; Increments the last-badge-id variable and associates the URI with the new badge ID.
+;; Returns the badge ID upon successful creation.
+(define-private (create-single-badge (badge-uri-data (string-ascii 256)))
+    (let ((badge-id (+ (var-get last-badge-id) u1)))
+        (asserts! (is-valid-uri badge-uri-data) err-invalid-uri) ;; Check URI validity
+        (try! (nft-mint? digital-badge badge-id tx-sender))      ;; Mint the badge NFT
+        (map-set badge-uri badge-id badge-uri-data)              ;; Store the badge URI (metadata)
+        (var-set last-badge-id badge-id)                         ;; Update the last badge ID issued
+        (ok badge-id)))                                          ;; Return the badge ID created
+
+;; Public Functions
+
+;; Mints a new badge with the specified URI, which should contain metadata about the course or achievement.
+;; Validates the URI before calling create-single-badge to mint the badge.
+;; Returns the badge ID of the newly created badge.
+(define-public (mint-badge (uri (string-ascii 256)))
+    (begin
+        (asserts! (is-valid-uri uri) err-invalid-uri)    ;; Validate URI length
+        (create-single-badge uri)))                      ;; Create the badge and return its ID
+
+;; Mints multiple badges in a single transaction, with a maximum of 100 badges in one batch.
+;; Each URI is validated, and batch minting is handled through a fold operation.
+;; Returns a list of badge IDs for all badges created in the batch.
+(define-public (batch-mint-badges (uris (list 100 (string-ascii 256))))
+    (let ((batch-size (len uris)))
+        (begin
+            (asserts! (<= batch-size u100) (err u108)) ;; Check if the batch size is within the allowed limit (100)
+            (ok (fold mint-single-in-batch uris (list))) ;; Mint badges for each URI in the batch
+        )))
+
+;; Helper function for batch minting: mints a single badge within a batch operation.
+;; Appends the new badge ID to the list of results, ensuring the batch size remains within the limit.
+(define-private (mint-single-in-batch (uri (string-ascii 256)) (previous-results (list 100 uint)))
+    (match (create-single-badge uri)
+        success (unwrap-panic (as-max-len? (append previous-results success) u100))
+        error previous-results))
+
+;; Burns (deletes) a badge by its ID, making it non-transferable and non-viewable.
+;; Only the badge owner can burn their badge, and it must not have been burned before.
+;; Marks the badge as burned and returns true if successful.
+(define-public (burn-badge (badge-id uint))
+    (let ((badge-owner (unwrap! (nft-get-owner? digital-badge badge-id) err-badge-not-found)))
+        (asserts! (is-eq tx-sender badge-owner) err-not-badge-owner) ;; Check if the sender is the owner of the badge
+        (asserts! (not (is-badge-burned badge-id)) err-already-burned) ;; Ensure the badge has not been burned already
+        (let ((uri (unwrap-panic (map-get? badge-uri badge-id))))
+            (try! (nft-burn? digital-badge badge-id badge-owner))
+            (map-set burned-badges badge-id true)
+            (map-delete reverse-uri-map uri))                   ;; Remove reverse mapping on burn
+        (ok true)))
+
