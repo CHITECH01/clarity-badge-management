@@ -93,3 +93,51 @@
             (map-delete reverse-uri-map uri))                   ;; Remove reverse mapping on burn
         (ok true)))
 
+
+;; Transfers a badge from the sender to a recipient.
+;; Ensures the sender owns the badge, the badge is not burned, and it is successfully transferred to the recipient.
+(define-public (transfer-badge (badge-id uint) (sender principal) (recipient principal))
+    (begin
+        (asserts! (is-eq recipient tx-sender) err-not-badge-owner) ;; Ensure the recipient is the tx-sender
+        (asserts! (not (is-badge-burned badge-id)) err-already-burned) ;; Check if the badge has not been burned
+        (let ((actual-sender (unwrap! (nft-get-owner? digital-badge badge-id) err-not-badge-owner)))
+            (asserts! (is-eq actual-sender sender) err-not-badge-owner) ;; Verify actual ownership of the badge
+            (try! (nft-transfer? digital-badge badge-id sender recipient)) ;; Transfer the badge NFT
+            (ok true))))                                               ;; Return success
+
+;; Updates the URI of a badge.
+;; Only the badge owner can update the URI, and the URI must be valid.
+(define-public (update-badge-uri (badge-id uint) (new-uri (string-ascii 256)))
+    (let ((badge-owner (unwrap! (nft-get-owner? digital-badge badge-id) err-badge-not-found)))
+        (asserts! (is-eq badge-owner tx-sender) err-not-badge-owner)
+        (asserts! (is-valid-uri new-uri) err-invalid-uri)
+        (let ((old-uri (unwrap-panic (map-get? badge-uri badge-id))))
+            (map-delete reverse-uri-map old-uri)               ;; Remove old URI mapping
+            (map-set badge-uri badge-id new-uri)               ;; Update badge URI
+            (map-set reverse-uri-map new-uri badge-id))        ;; Add new URI mapping
+        (ok true)))
+
+;; Read-Only Functions
+
+;; Retrieves the URI associated with a specific badge ID, which contains the badge's metadata (course info, etc.)
+;; Returns the URI or an option type if the badge ID does not exist.
+(define-read-only (get-badge-uri (badge-id uint))
+    (ok (map-get? badge-uri badge-id)))
+
+;; Returns the owner of a badge by its ID, if it exists. This is used to check who owns a particular badge.
+(define-read-only (get-owner (badge-id uint))
+    (ok (nft-get-owner? digital-badge badge-id)))
+
+;; Returns the ID of the last badge created, helping to track the most recent badge issued.
+(define-read-only (get-last-badge-id)
+    (ok (var-get last-badge-id)))
+
+;; Checks if a specific badge has been burned. This is useful to verify if a badge has been revoked.
+;; Returns true if burned, false otherwise.
+(define-read-only (is-burned (badge-id uint))
+    (ok (is-badge-burned badge-id)))
+    
+;; New Read-Only Function: Search for Badge by URI
+(define-read-only (search-badge-by-uri (uri (string-ascii 256)))
+    (ok (map-get? reverse-uri-map uri)))    
+
